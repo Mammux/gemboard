@@ -150,9 +150,7 @@ impl AssetManager {
                     {
                         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                             if let Ok(sprite) = Sprite::load_from_file(&path) {
-                                self.monster_sprites.insert(stem.to_string(), sprite.clone());
-                                self.monster_sprites
-                                    .insert(stem.to_lowercase(), sprite);
+                                self.add_monster_sprite(stem, sprite);
                             }
                         }
                     }
@@ -174,8 +172,11 @@ impl AssetManager {
     /// Adds or replaces a monster sprite associated with a label or identifier.
     pub fn add_monster_sprite(&mut self, label: impl Into<String>, sprite: Sprite) {
         let name = label.into();
-        self.monster_sprites.insert(name.to_lowercase(), sprite.clone());
-        self.monster_sprites.insert(name, sprite);
+        let lower = name.to_lowercase();
+        self.monster_sprites.insert(name.clone(), sprite.clone());
+        if name != lower {
+            self.monster_sprites.insert(lower, sprite);
+        }
     }
 
     /// Returns the wall tile sprite if available.

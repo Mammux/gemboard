@@ -44,4 +44,4 @@ All bundled art assets in this directory are released under the **CC0 1.0 Univer
 
 2. **Adding Monster Sprites**:
    - Save a PNG image with a transparent background in `assets/monsters/`.
-   - File names correspond to monster labels or names (case-insensitive or exact match). For example, a monster created with `Monster::new(x, y, color, "goblin")` will load `assets/monsters/goblin.png`. If labeled `"G"`, it will check `assets/monsters/G.png` or fallback to `"goblin.png"`.
+   - File names correspond to monster labels or names (case-insensitive). For example, a monster created with `Monster::new(x, y, color, "goblin")` matches `assets/monsters/goblin.png`. If labeled `"G"`, save the sprite as `assets/monsters/G.png`.
