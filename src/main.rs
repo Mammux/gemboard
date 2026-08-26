@@ -23,7 +23,7 @@ fn main() {
         dungeon.monsters().len()
     );
 
-    let (width, height, _) = render_to_buffer(&dungeon, TILE_SIZE);
+    let (width, height, mut buffer) = render_to_buffer(&dungeon, TILE_SIZE);
 
     let mut window = Window::new(
         "Gemboard - Dungeon Map",
@@ -40,6 +40,8 @@ fn main() {
     let mut dragging: Option<usize> = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        let mut moved = false;
+
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(MouseMode::Clamp) {
             let (tile_x, tile_y) = pixel_to_tile(mouse_x, mouse_y, TILE_SIZE);
 
@@ -48,7 +50,7 @@ fn main() {
                     Some(index) => {
                         // Continue dragging: try to move the monster to
                         // the tile under the cursor.
-                        dungeon.move_monster(index, tile_x, tile_y);
+                        moved = dungeon.move_monster(index, tile_x, tile_y);
                     }
                     None => {
                         // A new click: start dragging if a monster is
@@ -63,7 +65,14 @@ fn main() {
             }
         }
 
-        let (_, _, buffer) = render_to_buffer(&dungeon, TILE_SIZE);
+        // Only rebuild the pixel buffer when the map state actually
+        // changed, since the map and monster positions are otherwise
+        // static between frames.
+        if moved {
+            let (_, _, new_buffer) = render_to_buffer(&dungeon, TILE_SIZE);
+            buffer = new_buffer;
+        }
+
         window
             .update_with_buffer(&buffer, width, height)
             .expect("failed to update window buffer");

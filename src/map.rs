@@ -101,11 +101,14 @@ impl DungeonMap {
     }
 
     /// Adds a monster to the map at the given position, as long as the
-    /// target tile is a floor tile. Returns `true` if the monster was
-    /// placed, or `false` if the position is invalid (out of bounds or a
-    /// wall).
+    /// target tile is a floor tile and not already occupied by another
+    /// monster. Returns `true` if the monster was placed, or `false` if the
+    /// position is invalid (out of bounds, a wall, or occupied).
     pub fn add_monster(&mut self, monster: Monster) -> bool {
         if !self.is_floor(monster.x, monster.y) {
+            return false;
+        }
+        if self.monster_at(monster.x, monster.y).is_some() {
             return false;
         }
         self.monsters.push(monster);
@@ -285,6 +288,15 @@ mod tests {
         let monster = Monster::new(10, 10, 0x00FF0000, "G");
         assert!(!map.add_monster(monster));
         assert_eq!(map.monsters().len(), 0);
+    }
+
+    #[test]
+    fn add_monster_fails_when_tile_occupied() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        assert!(map.add_monster(Monster::new(2, 2, 0x00FF0000, "G")));
+        assert!(!map.add_monster(Monster::new(2, 2, 0x0000FF00, "O")));
+        assert_eq!(map.monsters().len(), 1);
     }
 
     #[test]
