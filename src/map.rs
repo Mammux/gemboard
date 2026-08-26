@@ -8,12 +8,38 @@ pub enum Tile {
     Floor,
 }
 
+/// A monster placed on the map, tracked by its tile position and a color
+/// used to render it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Monster {
+    pub x: usize,
+    pub y: usize,
+    /// Color used to render this monster, in `0x00RRGGBB` format.
+    pub color: u32,
+    /// A short label identifying this monster (e.g. "G" for goblin).
+    pub label: String,
+}
+
+impl Monster {
+    /// Creates a new monster at the given position with the given color
+    /// and label.
+    pub fn new(x: usize, y: usize, color: u32, label: impl Into<String>) -> Self {
+        Monster {
+            x,
+            y,
+            color,
+            label: label.into(),
+        }
+    }
+}
+
 /// A rectangular grid of tiles representing a dungeon map.
 #[derive(Debug, Clone)]
 pub struct DungeonMap {
     pub width: usize,
     pub height: usize,
     tiles: Vec<Tile>,
+    monsters: Vec<Monster>,
 }
 
 impl DungeonMap {
@@ -23,6 +49,7 @@ impl DungeonMap {
             width,
             height,
             tiles: vec![Tile::Wall; width * height],
+            monsters: Vec::new(),
         }
     }
 
@@ -62,6 +89,60 @@ impl DungeonMap {
         map.carve_room(12, 3, 12, 8);
         map
     }
+
+    /// Returns a slice of the monsters currently on the map.
+    pub fn monsters(&self) -> &[Monster] {
+        &self.monsters
+    }
+
+    /// Returns true if the given tile exists and is a floor tile.
+    pub fn is_floor(&self, x: usize, y: usize) -> bool {
+        matches!(self.get(x, y), Some(Tile::Floor))
+    }
+
+    /// Adds a monster to the map at the given position, as long as the
+    /// target tile is a floor tile and not already occupied by another
+    /// monster. Returns `true` if the monster was placed, or `false` if the
+    /// position is invalid (out of bounds, a wall, or occupied).
+    pub fn add_monster(&mut self, monster: Monster) -> bool {
+        if !self.is_floor(monster.x, monster.y) {
+            return false;
+        }
+        if self.monster_at(monster.x, monster.y).is_some() {
+            return false;
+        }
+        self.monsters.push(monster);
+        true
+    }
+
+    /// Returns the index of the monster occupying the given tile, if any.
+    pub fn monster_at(&self, x: usize, y: usize) -> Option<usize> {
+        self.monsters.iter().position(|m| m.x == x && m.y == y)
+    }
+
+    /// Attempts to move the monster at `index` to the given tile. The move
+    /// only succeeds if the target tile is a floor tile within bounds and
+    /// is not already occupied by another monster. Returns `true` if the
+    /// monster was moved.
+    pub fn move_monster(&mut self, index: usize, x: usize, y: usize) -> bool {
+        if index >= self.monsters.len() {
+            return false;
+        }
+        if !self.is_floor(x, y) {
+            return false;
+        }
+        if self
+            .monsters
+            .iter()
+            .enumerate()
+            .any(|(i, m)| i != index && m.x == x && m.y == y)
+        {
+            return false;
+        }
+        self.monsters[index].x = x;
+        self.monsters[index].y = y;
+        true
+    }
 }
 
 /// Renders the dungeon map to an RGB pixel buffer, where each tile is
@@ -89,6 +170,28 @@ pub fn render_to_buffer(map: &DungeonMap, tile_size: usize) -> (usize, usize, Ve
                 for tx in 0..tile_size {
                     buffer[row_start + tx] = color;
                 }
+            }
+        }
+    }
+
+    for monster in &map.monsters {
+        let x0 = monster.x * tile_size;
+        let y0 = monster.y * tile_size;
+        // Draw the monster as a slightly inset square so the underlying
+        // floor/wall tile remains visible as a border.
+        let inset = (tile_size / 6).max(1);
+        for ty in inset..tile_size.saturating_sub(inset) {
+            let row = y0 + ty;
+            if row >= px_height {
+                continue;
+            }
+            let row_start = row * px_width;
+            for tx in inset..tile_size.saturating_sub(inset) {
+                let col = x0 + tx;
+                if col >= px_width {
+                    continue;
+                }
+                buffer[row_start + col] = monster.color;
             }
         }
     }
@@ -161,6 +264,89 @@ mod tests {
     }
 
     #[test]
+    fn add_monster_succeeds_on_floor_tile() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        let monster = Monster::new(2, 2, 0x00FF0000, "G");
+        assert!(map.add_monster(monster));
+        assert_eq!(map.monsters().len(), 1);
+        assert_eq!(map.monster_at(2, 2), Some(0));
+    }
+
+    #[test]
+    fn add_monster_fails_on_wall_tile() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        let monster = Monster::new(0, 0, 0x00FF0000, "G");
+        assert!(!map.add_monster(monster));
+        assert_eq!(map.monsters().len(), 0);
+    }
+
+    #[test]
+    fn add_monster_fails_out_of_bounds() {
+        let mut map = DungeonMap::new(5, 5);
+        let monster = Monster::new(10, 10, 0x00FF0000, "G");
+        assert!(!map.add_monster(monster));
+        assert_eq!(map.monsters().len(), 0);
+    }
+
+    #[test]
+    fn add_monster_fails_when_tile_occupied() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        assert!(map.add_monster(Monster::new(2, 2, 0x00FF0000, "G")));
+        assert!(!map.add_monster(Monster::new(2, 2, 0x0000FF00, "O")));
+        assert_eq!(map.monsters().len(), 1);
+    }
+
+    #[test]
+    fn move_monster_to_floor_tile_succeeds() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        map.add_monster(Monster::new(1, 1, 0x00FF0000, "G"));
+        assert!(map.move_monster(0, 3, 3));
+        assert_eq!(map.monsters()[0].x, 3);
+        assert_eq!(map.monsters()[0].y, 3);
+    }
+
+    #[test]
+    fn move_monster_to_wall_tile_fails() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        map.add_monster(Monster::new(1, 1, 0x00FF0000, "G"));
+        assert!(!map.move_monster(0, 0, 0));
+        // Position should remain unchanged.
+        assert_eq!(map.monsters()[0].x, 1);
+        assert_eq!(map.monsters()[0].y, 1);
+    }
+
+    #[test]
+    fn move_monster_out_of_bounds_fails() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        map.add_monster(Monster::new(1, 1, 0x00FF0000, "G"));
+        assert!(!map.move_monster(0, 100, 100));
+    }
+
+    #[test]
+    fn move_monster_onto_another_monster_fails() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        map.add_monster(Monster::new(1, 1, 0x00FF0000, "G"));
+        map.add_monster(Monster::new(2, 2, 0x0000FF00, "O"));
+        assert!(!map.move_monster(0, 2, 2));
+        assert_eq!(map.monsters()[0].x, 1);
+        assert_eq!(map.monsters()[0].y, 1);
+    }
+
+    #[test]
+    fn move_monster_invalid_index_fails() {
+        let mut map = DungeonMap::new(5, 5);
+        map.carve_room(1, 1, 3, 3);
+        assert!(!map.move_monster(0, 2, 2));
+    }
+
+    #[test]
     fn render_to_buffer_colors_floor_and_wall_differently() {
         let mut map = DungeonMap::new(2, 1);
         map.set(1, 0, Tile::Floor);
@@ -169,5 +355,16 @@ mod tests {
         assert_eq!(buffer[0], buffer[1]);
         // Right tile (floor) block differs from left.
         assert_ne!(buffer[0], buffer[w - 1]);
+    }
+
+    #[test]
+    fn render_to_buffer_draws_monster_on_top() {
+        let mut map = DungeonMap::new(2, 1);
+        map.set(1, 0, Tile::Floor);
+        map.add_monster(Monster::new(1, 0, 0x00FF00FF, "M"));
+        let (w, _h, buffer) = render_to_buffer(&map, 6);
+        // Center pixel of the floor tile should be the monster's color.
+        let center = 3 * w + 8; // row 3 (mid of 6), col within tile 1 (inset 1..5)
+        assert_eq!(buffer[center], 0x00FF00FF);
     }
 }
