@@ -490,8 +490,9 @@ mod tests {
         assets.add_monster_sprite("goblin", goblin_sprite);
 
         let (w, _h, buffer) = render_to_buffer_with_assets(&map, 4, &assets);
-        assert_eq!(buffer[0], 0x00111111);
-        assert_eq!(buffer[w - 1], 0x00333333);
+        assert_eq!(w, 8);
+        assert_eq!(buffer[0], 0x00111111); // Wall tile (tile 0)
+        assert_eq!(buffer[4], 0x00333333); // Goblin sprite over floor tile (tile 1)
     }
 
     #[test]

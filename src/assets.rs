@@ -105,8 +105,27 @@ impl AssetManager {
 
     /// Creates an AssetManager with assets loaded from the given directory path.
     pub fn load_from_dir<P: AsRef<Path>>(base_dir: P) -> Self {
+        let mut path = base_dir.as_ref().to_path_buf();
+        if !path.exists() {
+            let folder_name = path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("assets"));
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let candidate = exe_dir.join(folder_name);
+                    if candidate.exists() {
+                        path = candidate;
+                    } else if let Some(parent) = exe_dir.parent() {
+                        let candidate_parent = parent.join(folder_name);
+                        if candidate_parent.exists() {
+                            path = candidate_parent;
+                        }
+                    }
+                }
+            }
+        }
         let mut manager = AssetManager {
-            base_dir: base_dir.as_ref().to_path_buf(),
+            base_dir: path,
             wall_tile: None,
             floor_tile: None,
             monster_sprites: HashMap::new(),
@@ -171,12 +190,7 @@ impl AssetManager {
 
     /// Adds or replaces a monster sprite associated with a label or identifier.
     pub fn add_monster_sprite(&mut self, label: impl Into<String>, sprite: Sprite) {
-        let name = label.into();
-        let lower = name.to_lowercase();
-        self.monster_sprites.insert(name.clone(), sprite.clone());
-        if name != lower {
-            self.monster_sprites.insert(lower, sprite);
-        }
+        self.monster_sprites.insert(label.into().to_lowercase(), sprite);
     }
 
     /// Returns the wall tile sprite if available.
@@ -191,9 +205,7 @@ impl AssetManager {
 
     /// Looks up a monster sprite by label (e.g. "goblin", "G", "orc", "O").
     pub fn monster_sprite(&self, label: &str) -> Option<&Sprite> {
-        self.monster_sprites
-            .get(label)
-            .or_else(|| self.monster_sprites.get(&label.to_lowercase()))
+        self.monster_sprites.get(&label.to_lowercase())
     }
 }
 
