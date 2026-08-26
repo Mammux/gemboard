@@ -1,6 +1,8 @@
 //! A simple dungeon map made of tiles, plus helpers to render it as a
 //! pixel buffer suitable for display in a window.
 
+use crate::assets::AssetManager;
+
 /// A single tile in the dungeon map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tile {
@@ -145,12 +147,17 @@ impl DungeonMap {
     }
 }
 
-/// Renders the dungeon map to an RGB pixel buffer, where each tile is
-/// drawn as a `tile_size`-by-`tile_size` block of pixels.
+/// Renders the dungeon map to an RGB pixel buffer using the provided assets manager.
 ///
-/// The returned buffer is in the `0x00RRGGBB` format expected by
-/// `minifb`, with a length of `map.width * tile_size * map.height * tile_size`.
-pub fn render_to_buffer(map: &DungeonMap, tile_size: usize) -> (usize, usize, Vec<u32>) {
+/// If an asset for a tile or monster is present, it will be sampled and rendered.
+/// Otherwise, rendering falls back to solid colors.
+///
+/// The returned buffer is in the `0x00RRGGBB` format expected by `minifb`.
+pub fn render_to_buffer_with_assets(
+    map: &DungeonMap,
+    tile_size: usize,
+    assets: &AssetManager,
+) -> (usize, usize, Vec<u32>) {
     const WALL_COLOR: u32 = 0x00303030;
     const FLOOR_COLOR: u32 = 0x00C2A46B;
 
@@ -158,17 +165,65 @@ pub fn render_to_buffer(map: &DungeonMap, tile_size: usize) -> (usize, usize, Ve
     let px_height = map.height * tile_size;
     let mut buffer = vec![WALL_COLOR; px_width * px_height];
 
+    let wall_sprite = assets.wall_tile();
+    let floor_sprite = assets.floor_tile();
+
     for y in 0..map.height {
         for x in 0..map.width {
-            let color = match map.get(x, y) {
+            let tile = map.get(x, y);
+            let sprite = match tile {
+                Some(Tile::Floor) => floor_sprite,
+                _ => wall_sprite,
+            };
+
+            let fallback_color = match tile {
                 Some(Tile::Floor) => FLOOR_COLOR,
                 _ => WALL_COLOR,
             };
+
+            let tile_x0 = x * tile_size;
+            let tile_y0 = y * tile_size;
+
             for ty in 0..tile_size {
-                let row = y * tile_size + ty;
-                let row_start = row * px_width + x * tile_size;
+                let row = tile_y0 + ty;
+                if row >= px_height {
+                    continue;
+                }
+                let row_start = row * px_width;
+
                 for tx in 0..tile_size {
-                    buffer[row_start + tx] = color;
+                    let col = tile_x0 + tx;
+                    if col >= px_width {
+                        continue;
+                    }
+
+                    let pixel_color = if let Some(s) = sprite {
+                        let rgba = s.sample_at(tx, ty, tile_size, tile_size);
+                        if rgba[3] == 255 {
+                            ((rgba[0] as u32) << 16) | ((rgba[1] as u32) << 8) | (rgba[2] as u32)
+                        } else if rgba[3] == 0 {
+                            fallback_color
+                        } else {
+                            let a = rgba[3] as u32;
+                            let fg_r = rgba[0] as u32;
+                            let fg_g = rgba[1] as u32;
+                            let fg_b = rgba[2] as u32;
+
+                            let bg_r = (fallback_color >> 16) & 0xFF;
+                            let bg_g = (fallback_color >> 8) & 0xFF;
+                            let bg_b = fallback_color & 0xFF;
+
+                            let r = (fg_r * a + bg_r * (255 - a)) / 255;
+                            let g = (fg_g * a + bg_g * (255 - a)) / 255;
+                            let b = (fg_b * a + bg_b * (255 - a)) / 255;
+
+                            (r << 16) | (g << 8) | b
+                        }
+                    } else {
+                        fallback_color
+                    };
+
+                    buffer[row_start + col] = pixel_color;
                 }
             }
         }
@@ -177,26 +232,75 @@ pub fn render_to_buffer(map: &DungeonMap, tile_size: usize) -> (usize, usize, Ve
     for monster in &map.monsters {
         let x0 = monster.x * tile_size;
         let y0 = monster.y * tile_size;
-        // Draw the monster as a slightly inset square so the underlying
-        // floor/wall tile remains visible as a border.
-        let inset = (tile_size / 6).max(1);
-        for ty in inset..tile_size.saturating_sub(inset) {
-            let row = y0 + ty;
-            if row >= px_height {
-                continue;
-            }
-            let row_start = row * px_width;
-            for tx in inset..tile_size.saturating_sub(inset) {
-                let col = x0 + tx;
-                if col >= px_width {
+
+        if let Some(sprite) = assets.monster_sprite(&monster.label) {
+            for ty in 0..tile_size {
+                let row = y0 + ty;
+                if row >= px_height {
                     continue;
                 }
-                buffer[row_start + col] = monster.color;
+                let row_start = row * px_width;
+
+                for tx in 0..tile_size {
+                    let col = x0 + tx;
+                    if col >= px_width {
+                        continue;
+                    }
+
+                    let rgba = sprite.sample_at(tx, ty, tile_size, tile_size);
+                    let src_a = rgba[3] as u32;
+
+                    if src_a == 0 {
+                        continue;
+                    }
+
+                    let idx = row_start + col;
+                    let dst_u32 = buffer[idx];
+
+                    if src_a == 255 {
+                        buffer[idx] =
+                            ((rgba[0] as u32) << 16) | ((rgba[1] as u32) << 8) | (rgba[2] as u32);
+                    } else {
+                        let dst_r = (dst_u32 >> 16) & 0xFF;
+                        let dst_g = (dst_u32 >> 8) & 0xFF;
+                        let dst_b = dst_u32 & 0xFF;
+
+                        let r = (rgba[0] as u32 * src_a + dst_r * (255 - src_a)) / 255;
+                        let g = (rgba[1] as u32 * src_a + dst_g * (255 - src_a)) / 255;
+                        let b = (rgba[2] as u32 * src_a + dst_b * (255 - src_a)) / 255;
+
+                        buffer[idx] = (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+        } else {
+            // Draw the monster as a slightly inset square if no sprite exists.
+            let inset = (tile_size / 6).max(1);
+            for ty in inset..tile_size.saturating_sub(inset) {
+                let row = y0 + ty;
+                if row >= px_height {
+                    continue;
+                }
+                let row_start = row * px_width;
+                for tx in inset..tile_size.saturating_sub(inset) {
+                    let col = x0 + tx;
+                    if col >= px_width {
+                        continue;
+                    }
+                    buffer[row_start + col] = monster.color;
+                }
             }
         }
     }
 
     (px_width, px_height, buffer)
+}
+
+/// Renders the dungeon map to an RGB pixel buffer, where each tile is
+/// drawn as a `tile_size`-by-`tile_size` block of pixels, using default assets from `assets/`.
+pub fn render_to_buffer(map: &DungeonMap, tile_size: usize) -> (usize, usize, Vec<u32>) {
+    let assets = AssetManager::load_from_dir("assets");
+    render_to_buffer_with_assets(map, tile_size, &assets)
 }
 
 #[cfg(test)]
@@ -366,5 +470,47 @@ mod tests {
         // Center pixel of the floor tile should be the monster's color.
         let center = 3 * w + 8; // row 3 (mid of 6), col within tile 1 (inset 1..5)
         assert_eq!(buffer[center], 0x00FF00FF);
+    }
+
+    #[test]
+    fn render_to_buffer_with_assets_renders_graphic_tiles_and_sprites() {
+        use crate::assets::Sprite;
+
+        let mut map = DungeonMap::new(2, 1);
+        map.set(1, 0, Tile::Floor);
+        map.add_monster(Monster::new(1, 0, 0x00000000, "goblin"));
+
+        let mut assets = AssetManager::empty();
+        let wall_sprite = Sprite::solid_color(2, 2, 0x00111111);
+        let floor_sprite = Sprite::solid_color(2, 2, 0x00222222);
+        let goblin_sprite = Sprite::solid_color(2, 2, 0x00333333);
+
+        assets.set_wall_tile(wall_sprite);
+        assets.set_floor_tile(floor_sprite);
+        assets.add_monster_sprite("goblin", goblin_sprite);
+
+        let (w, _h, buffer) = render_to_buffer_with_assets(&map, 4, &assets);
+        assert_eq!(w, 8);
+        assert_eq!(buffer[0], 0x00111111); // Wall tile (tile 0)
+        assert_eq!(buffer[4], 0x00333333); // Goblin sprite over floor tile (tile 1)
+    }
+
+    #[test]
+    fn render_to_buffer_with_assets_blends_semi_transparent_sprite() {
+        use crate::assets::Sprite;
+
+        let mut map = DungeonMap::new(1, 1);
+        map.set(0, 0, Tile::Floor);
+        map.add_monster(Monster::new(0, 0, 0x00000000, "ghost"));
+
+        let mut assets = AssetManager::empty();
+        let floor_sprite = Sprite::solid_color(1, 1, 0x00000000);
+        let ghost_sprite = Sprite::new(1, 1, vec![255, 255, 255, 128]);
+
+        assets.set_floor_tile(floor_sprite);
+        assets.add_monster_sprite("ghost", ghost_sprite);
+
+        let (_w, _h, buffer) = render_to_buffer_with_assets(&map, 1, &assets);
+        assert_eq!(buffer[0], 0x00808080);
     }
 }

@@ -1,6 +1,8 @@
+mod assets;
 mod map;
 
-use map::{DungeonMap, Monster, render_to_buffer};
+use assets::AssetManager;
+use map::{DungeonMap, Monster, render_to_buffer_with_assets};
 use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
 
 const TILE_SIZE: usize = 24;
@@ -23,7 +25,9 @@ fn main() {
         dungeon.monsters().len()
     );
 
-    let (width, height, mut buffer) = render_to_buffer(&dungeon, TILE_SIZE);
+    let assets = AssetManager::load_from_dir("assets");
+
+    let (width, height, mut buffer) = render_to_buffer_with_assets(&dungeon, TILE_SIZE, &assets);
 
     let mut window = Window::new(
         "Gemboard - Dungeon Map",
@@ -69,7 +73,7 @@ fn main() {
         // changed, since the map and monster positions are otherwise
         // static between frames.
         if moved {
-            let (_, _, new_buffer) = render_to_buffer(&dungeon, TILE_SIZE);
+            let (_, _, new_buffer) = render_to_buffer_with_assets(&dungeon, TILE_SIZE, &assets);
             buffer = new_buffer;
         }
 
